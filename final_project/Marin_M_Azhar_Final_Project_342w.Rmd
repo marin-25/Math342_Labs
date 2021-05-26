@@ -1,0 +1,469 @@
+---
+title: "Final Project.Rmd"
+author: "Marin Azhar"
+output:
+  word_document: default
+  html_document: default
+---
+#Loading the 2016-2017 Housing Data for Queens
+```{r}
+pacman::p_load(tidyverse, magrittr, data.table, R.utils, skimr)
+housing_data = fread("https://raw.githubusercontent.com/kapelner/QC_MATH_342W_Spring_2021/master/writing_assignments/housing_data_2016_2017.csv")
+
+housing_data = data.frame(housing_data)
+
+```
+
+We have 55 cols and 2230 rows in total.
+Our repose variable is sales_price.
+
+#Now we are dropping data that is not relevant to our data set.
+
+```{r}
+housing_data = housing_data%<>%
+  select(-HITId, -HITTypeId, -Title, -Description, -Keywords, -Reward, -CreationTime, -MaxAssignments, -RequesterAnnotation, -AssignmentDurationInSeconds, -AutoApprovalDelayInSeconds, -NumberOfSimilarHITs, -LifetimeInSeconds, -AssignmentId, -WorkerId, -AssignmentStatus, -AcceptTime, -SubmitTime, -AutoApprovalTime, -ApprovalTime,  -RejectionTime, -RequesterFeedback, -URL, -url, -Expiration, -Last30DaysApprovalRate, -Last7DaysApprovalRate ,-WorkTimeInSeconds, -LifetimeApprovalRate )
+
+#colnames(housing_data)
+#skim(housing_data)
+```
+
+
+#After another closer look at the data:
+
+1) We can drop model type because there are 875 unique categories and the information is either redundant (about number of bedrooms and bathrooms) or not useful because it's about a very specific building type name which has no value to us because we do not have the time to combined categories or gain any extra information from this col.  
+
+2) We can drop listing_price_to_nearest_1000 because it's redundant information since we have the sales_price col.
+
+3) We can drop num_floors_in_building because it is unnecessary and nyc has a building regulation (Section BC 3002.4) any building with more than five stories must have an elevator. While the data set does have buildings with less than five floors but because 650 rows have missing data and we can not impute or guess the number of floors a building has we will just drop this feature all together.
+
+etc.
+
+```{r}
+#after looking out our data set there are extra cols that we can delete 
+housing_data = housing_data%<>%
+  select( -model_type , -listing_price_to_nearest_1000, -num_floors_in_building, -pct_tax_deductibl, -date_of_sale, -community_district_num  )
+
+#-fuel_type
+```
+
+#Cleaning the data to reduce unique catigories 
+
+```{r}
+#notes taken with Sara on friday
+#find out deal with LifetimeApprovalRate
+#make approx_year_built into categorical ranges
+#binarize cats_allowed/dogs_allowed into 0's and 1's
+#make community district number into categorical features (factor)
+#make coop and condo into 0's and 1's
+#dining room type into categorical with reference category
+#combine half bathrooms with full bathrooms into one feature (maybe not?)
+#get rid of model_type col, but potentially use the values it contains to fill in blanks missing for other features (?)
+#combine the two types of "other" categories for fuel_type
+#take out either the zip of the address of full_address_or_zip_code
+#fix garage_exists and combine yes, Yes, eys, 1, UG, Underground into a single category 
+#fix kitchen type - combine all of them into "efficiency", "combo", "eatin", "none" (get rid of 1955?!?)
+#take out the dollar sign in maintnence_cost and make it into a numerical/continuous feature (it's currently a character)
+#num_total_rooms - is it worth keeping if we have num_bedrooms, number of bathrooms and whether or not there's a kitchen and dining room?
+#sale_price take out dollar signs and convert to a numerical/int type
+#sq_footage - should we make continuous or categorical range of values - make sure to impute the missingness (with missForest)
+#listing_price_to_nearest_1000 needs to have $ removed, and converted from chr to int/numerical
+
+#colnames(housing_data)
+```
+
+#Create zipcodes to catigorize the locations 
+
+```{r}
+#from Janine
+zip_codes = gsub("[^0-9.-]", "", housing_data$full_address_or_zip_code)
+housing_data$zip_codes = str_sub(zip_codes, -5, -1)
+
+```
+
+#Clean Zipcodes
+
+```{r}
+#unique(housing_data$zip_codes) # check for any incorrect zipcodes 
+ housing_data%>%
+  filter( housing_data$zip_codes =="1355." |  housing_data$zip_codes == "1367." | housing_data$zip_codes == "17-30" | housing_data$zip_codes == ".1136" | housing_data$zip_codes =="71137" |  housing_data$zip_codes == "01137" | housing_data$zip_codes == "81137" | housing_data$zip_codes == "01137" | housing_data$zip_codes == "71136" | housing_data$zip_codes == "51142"| housing_data$zip_codes == "51135")%>% #find correct zips and manually change them 
+  select(full_address_or_zip_code, zip_codes)
+
+#technically we could delete them since it's only 7 rows but because it's only 7 rows i can also manually fix it
+ 
+
+
+#Clean Zipcodes
+
+
+
+housing_data$zip_codes[housing_data$zip_codes == "1367."] <-"11367"
+#housing_data$zip_codes[housing_data$zip_codes == "17-30"] <-NA no address 
+housing_data$zip_codes[housing_data$zip_codes == ".1136"] <-"11369"
+housing_data$zip_codes[housing_data$zip_codes == "1355."] <-"11355"
+
+housing_data$zip_codes[housing_data$zip_codes == "81137"] <-"11372" 
+housing_data$zip_codes[housing_data$zip_codes == "71137"] <-"11372"
+housing_data$zip_codes[housing_data$zip_codes == "01137"] <-"11375"
+housing_data$zip_codes[housing_data$zip_codes == "1136"] <-"11364"
+housing_data$zip_codes[housing_data$zip_codes == "51142"] <-"11427"
+
+housing_data$zip_codes[housing_data$zip_codes == "51135"] <-"11355"
+housing_data$zip_codes[housing_data$zip_codes == "71136"] <-"11364"
+
+
+  
+housing_data = housing_data[housing_data$zip_codes !="17-30",] #remove rows
+#unique(housing_data$zip_codes)
+```
+
+
+```{r}
+#Mutate Zipcodes into Neigbhorhoods
+
+
+house2 = housing_data %>%
+  mutate(
+    
+ zip_codes =    ifelse(zip_codes == "11361" | zip_codes == "11362" | zip_codes == "11363" | zip_codes == "11364" , "Northeast Queens",zip_codes), 
+  zip_codes =  ifelse( zip_codes == "11354" | zip_codes == "11355" | zip_codes == "11356" | zip_codes == "11357" | zip_codes == "11358" | zip_codes == "11359" | zip_codes == "11360" , "North Queens", zip_codes),
+         
+ zip_codes =   ifelse( zip_codes == "11365" | zip_codes == "11366" | zip_codes == "11367" ,"Central Queens",zip_codes),
+   
+zip_codes =    ifelse( zip_codes == "11412" | zip_codes == "11423" | zip_codes == "11432" | zip_codes == "11433" | zip_codes == "11434" | zip_codes == "11435" | zip_codes == "11436" , "Jamaica" , zip_codes) ,
+   
+zip_codes =    ifelse( zip_codes == "11101" | zip_codes == "11102" | zip_codes == "11103" | zip_codes == "11104" | zip_codes == "11105" | zip_codes == "11106","Northwest Queens", zip_codes),
+   
+zip_codes =     ifelse(zip_codes == "11374" | zip_codes == "11375" | zip_codes == "11379" | zip_codes == "11385" , "West Central Queens", zip_codes),
+   
+ zip_codes =   ifelse(zip_codes == "11004" | zip_codes == "11005" | zip_codes == "11411" | zip_codes == "11413" | zip_codes == "11422" | zip_codes == "11426" | zip_codes == "11427" | zip_codes == "11428" | zip_codes == "11429" , "Southeast Queens", zip_codes),
+   
+ zip_codes =   ifelse(zip_codes == "11414" | zip_codes == "11415" | zip_codes == "11416" | zip_codes == "11417" | zip_codes == "11418" | zip_codes == "11419" | zip_codes == "11420"  | zip_codes == "11421" , "Southwest Queens", zip_codes),
+    
+zip_codes =    ifelse(zip_codes == "11368" | zip_codes == "11369" | zip_codes == "11370" | zip_codes == "11372" | zip_codes == "11373" | zip_codes == "11377" | zip_codes == "11378"  ,"West Queens", zip_codes)
+    
+    
+    
+)
+#unique(house2$zip_codes)
+
+
+```
+
+#Mutate other features 
+
+```{r}
+house2%<>%
+  mutate(
+    
+    cats_allowed = as.factor(ifelse(cats_allowed == "yes" | cats_allowed == "y", "yes","no")),
+    
+    coop_condo =as.factor(coop_condo),
+    zip_codes = as.factor(zip_codes),
+    
+    dogs_allowed = as.factor(ifelse(dogs_allowed == "yes" | dogs_allowed == "yes89", "yes","no")),
+    
+    kitchen_type = as.factor(case_when(kitchen_type == "efficiency kitchen" | kitchen_type == "efficiency" | 
+                            kitchen_type == "efficiemcy"| kitchen_type ==  "efficiency ktchen"| 
+                            kitchen_type == "efficiency kitchene" ~"efficiency kitchen", 
+                            kitchen_type == "eat in" | kitchen_type == "Eat In" | kitchen_type == "eatin" |  
+                            kitchen_type =="1955"|kitchen_type == "Eat in" ~ "eat in", 
+                            kitchen_type =="Combo"| kitchen_type == "combo" ~ "combo")),
+    
+    dining_room_type= as.factor(case_when(dining_room_type == "none" |
+                                dining_room_type == "other" ~"other" , dining_room_type == "dining area" | 
+                                dining_room_type =="combo" ~ "combo", dining_room_type =="formal" ~"formal")),
+    
+    fuel_type = as.factor(ifelse(fuel_type == "other" | fuel_type == "Other" | fuel_type =="none", "other", fuel_type)),        #not 
+#using fuel type because the zipcode/location dictates what kind of infrastructure a building can built, there fore fuel type is a Spurious relationship....
+   
+    
+    #change garage to a parking space a parking space that is non underground could exist and we can tell based on if a parking charges exist also how do we know if yes = underground or if it's different,thus make it all the same category 
+    
+    garage_exists = as.factor(ifelse(garage_exists =="Underground"| garage_exists == "Yes" | garage_exists == "yes" |
+                              garage_exists == "1" |garage_exists =="eys"  | is.na(parking_charges) ==FALSE ,"yes","no")), #dealing with missingnes minimally 
+  
+    walk_score = as.factor(case_when( walk_score < 50 ~ "Car-Dependent", 
+                                  walk_score >49 &walk_score <70 ~ "Somewhat Walkable",
+                                  walk_score>69 & walk_score <90 ~ "Very Walkable", 
+                                  walk_score>89 & walk_score <= 100 ~ "Walker's Paradise")), 
+  
+
+   # approx_year_built = as.factor(case_when(approx_year_built < 1939 ~ "Pre war", 
+                                        #  approx_year_built >=1939  &  approx_year_built  <= 1990~ "During or Post war" ,
+                                         # approx_year_built >=1990 ~ "Contemporary (after 1990)" )),
+      
+    common_charges = as.integer(str_remove_all(common_charges, "[$,]")),
+    maintenance_cost = as.integer(str_remove_all(maintenance_cost, "[$,]")),
+    total_taxes = as.integer(str_remove_all(total_taxes, "[$,]" )), # need na 
+    total_taxes =(total_taxes/12), # make it a monthly cost
+    sale_price = as.integer(str_remove_all(sale_price, "[$,]")) # this is our reponse varable 
+    
+   
+   )
+
+```
+
+
+```{r}
+ house2%<>%
+select(-parking_charges, -full_address_or_zip_code )
+
+```
+
+
+```{r}
+house2 %<>% 
+  rename(
+    parking_exists = garage_exists, #it could have a parking lot isntead of a garage moreover because we had the parking prices we know a spot somowhere existed 
+    neighborhood = zip_codes
+    )
+
+house2$parking_exists[is.na(house2$parking_exists) ==TRUE ] <-"no" #we are making an assumption here
+house2$num_half_bathrooms[is.na(house2$num_half_bathrooms) ==TRUE] <-0 # asumption
+
+```
+
+
+```{r}
+#Problem sometimes the co_op's do not have a maintenance cost by they have a common charage, and vis versa one way to deal with this is to swap the charges in the right place. co_ops should only have a monthy maintance cost and condos should only have a monthy common chrage + total taxtes.
+
+
+house2$fix_mc_swaps = rowSums(house2[ , c("common_charges","maintenance_cost")], na.rm =TRUE) 
+house2$fix_cc_swaps_add_total_taxes = rowSums(house2[ ,c("common_charges","maintenance_cost", "total_taxes")], na.rm =TRUE) #maybe dont add total taxes yet 
+house2$maintenance_cost = house2$fix_mc_swaps
+house2$common_charges = house2$fix_cc_swaps_add_total_taxes
+```
+
+
+```{r}
+#Fill back the Zeros
+
+
+house_condo = house2%>%
+filter(coop_condo =="condo")
+
+house_coop =house2%>%
+  filter(coop_condo == "co-op")
+
+house_condo$maintenance_cost <- 0 #condos do not have maintenance_cost
+house_condo$common_charges[house_condo$common_charge == 0] <- NA #to impute on common_charfes
+house_coop$common_charges <- 0 #coops do not have common_charges
+house_coop$maintenance_cost[house_coop$maintenance_cost == 0]<- NA #if a zero impute cost
+```
+
+
+```{r}
+#Combind back the Data set
+
+
+house2 =rbind(house_condo, house_coop) #stich back the two data frames 
+
+house2 =house2%>%
+  select(-fix_mc_swaps, -fix_cc_swaps_add_total_taxes, -total_taxes) # drop unecessary cols
+
+house2 <- house2[sample(1:nrow(house2)), ] # to randmize the order of the data again 
+
+```
+
+
+```{r}
+# final clean drop rows so features have 0% missingness 
+
+
+house2 = house2[is.na(house2$common_charges) == FALSE,] #only one missing just drop row
+#house2 = house2[is.na(house2$num_total_rooms) == FALSE,] #only two missing just drop row //dropped it so the lin model can work
+
+summary(house2) #for part 2 in the essay 
+```
+
+#Create dummy varaiables for imputation on features that have less than 90% missing 
+
+```{r}
+set.seed(718)
+
+M = tbl_df(apply(is.na(house2), 2, as.numeric))
+colnames(M) = paste(colnames(house2), "_is_missing", sep = "")
+M = tbl_df(t(unique(t(M))))
+M %<>% 
+  select_if(function(x){sum(x) > 0})
+
+house2 = cbind(M, house2)
+```
+```{r}
+missing_col = ncol(M)
+```
+#final list of features 
+```{r}
+colnames(house2)
+```
+
+
+#create train and test splits
+
+```{r}
+obs_without_responses = house2 %>%
+  filter(is.na(sale_price))
+obs_with_responses = house2 %>%
+  filter(!is.na(sale_price))
+
+n = nrow(obs_with_responses) #there are 528 observations with responses that we can use later on
+k = 5
+
+test_indices = sample(1 : n, 1 / k * n)
+train_indices = setdiff(1 : n, test_indices)
+
+n_test = as.integer((1 / k) * n)
+n_train = as.integer(n - n_test)
+
+training = obs_with_responses[train_indices, ]
+testing = obs_with_responses[test_indices, ]
+
+X_test = testing %>%
+  mutate(sale_price = NA)
+y_test = testing$sale_price
+
+```
+
+#impute on data using missForest
+
+
+```{r}
+pacman::p_load(missForest)
+
+#fill in missingness
+housing_missing = rbind(training, X_test, obs_without_responses) #can use all data except y_test (to use it would be cheating)
+
+housing_complete = missForest(housing_missing)$ximp
+#housing_complete
+sum(is.na(housing_complete))
+skim(housing_complete)
+
+housing = housing_complete %>%
+  filter(sale_price_is_missing == 0) %>%
+  select(-sale_price_is_missing) 
+
+housing = cbind(housing[, -(1:missing_col)], tbl_df(t(unique(t(housing[,(1:missing_col)]))))) #make sure all col are linearly independent
+
+housing_training = housing[1:n_train, ]
+housing_test = housing[(n_train+1):n, ]
+
+housing_test$sale_price = y_test
+
+```
+
+```{r}
+#combine charges with maintenance cost after imputation before creating models 
+housing_test %<>%
+  mutate(total_cost = maintenance_cost + common_charges) %<>%
+  select(-maintenance_cost, -common_charges)
+
+housing_training %<>%
+  mutate(total_cost = maintenance_cost + common_charges) %<>%
+  select(-maintenance_cost, -common_charges)
+
+housing_ytest = housing_test$sale_price
+housing_Xtest = housing_test
+housing_Xtest$sale_price = NULL
+
+housing_ytrain = housing_training$sale_price
+housing_Xtrain = housing_training
+housing_Xtrain$sale_price = NULL
+```
+
+```{r}
+#Regression Tree Model
+pacman::p_load(YARF)
+options(java.parameters = "-Xmx4000m")
+
+reg_tree = YARFCART(housing_Xtrain, housing_ytrain)
+reg_tree
+get_tree_num_nodes_leaves_max_depths(reg_tree)
+tree_image = illustrate_trees(reg_tree, max_depth = 5, open_file = TRUE, length_in_px_per_half_split = 40) # will give the locally best nodes 
+
+#in-sample stats
+y_hat_train = predict(reg_tree, housing_Xtrain)
+e = housing_ytrain - y_hat_train
+sd(e) #s_e
+insamp_r_sq = 1 - sd(e) / sd(housing_ytrain) #R^2
+cat("in sample r^2 = ", insamp_r_sq , "\n ")
+
+#oos stats
+y_hat_test_tree = predict(reg_tree, housing_Xtest)
+e = housing_ytest - y_hat_test_tree
+sd(e)
+oos_r_sq = 1 - sd(e) / sd(housing_ytest)
+cat("oos r^2 =" , oos_r_sq )
+```
+
+```{r}
+#Linear Modeling
+pacman::p_load(xtable)
+
+lin_mod = lm(housing_ytrain ~ . , housing_Xtrain)
+lin_mod
+
+#in-sample stats
+summary(lin_mod)$sigma
+lin_insample_rsq =summary(lin_mod)$r.squared
+cat("insaple r^2 =" ,lin_insample_rsq, "\n")
+xtable(lin_mod)
+
+#oos stats
+y_hat_test_linear = predict(lin_mod, housing_Xtest)
+e = housing_ytest - y_hat_test_linear
+sd(e)
+lin_oos_rsq = 1 - sd(e) / sd(housing_ytest)
+cat("oos r^2 =" , lin_oos_rsq, "\n")
+summary(lin_mod)
+```
+
+```{r}
+#Random Forest 
+
+
+pacman::p_load(mlr)
+#housing_Xcomplete = union_all(housing_Xtrain, housing_Xtest) # its iliegal to use the test data
+housing_Xcomplete = housing_Xtrain
+#y_salesprice = union_all(housing_ytrain, housing_ytest)
+y_salesprice = housing_ytrain
+mlr_data = cbind(y_salesprice, housing_Xcomplete)
+colnames(mlr_data)[1] = "sales_price"
+task = makeRegrTask(data = mlr_data, target = "sales_price")
+
+parms = makeParamSet(
+  makeIntegerParam("mtry", lower = 2, upper = ncol(housing_Xcomplete)), #feature depandent mtry can not be greater than num of col
+  makeIntegerParam("ntree", lower = 2, upper = 100 ), # it is possible to go higher 
+  makeIntegerParam("nodesize", lower =2, upper = 100)
+)
+
+
+desc <- makeResampleDesc("CV", iters = 20)
+ctrl <- makeTuneControlRandom(maxit = 20)
+mlr_ret <- tuneParams("regr.randomForest", task = task, resampling = desc, par.set = parms, control = ctrl, measures = list(rmse))
+
+#Optimal result
+mlr_ret
+
+```
+
+```{r}
+rf_mod = YARF(housing_Xcomplete, y_salesprice, mtry= as.integer(mlr_ret$x[1]), num_trees = as.integer(mlr_ret$x[2]), nodesize =as.integer(mlr_ret$x[3]) )
+rf_mod
+#rf_is_mod = YARF(housing_Xtest, housing_ytest, mtry= as.integer(mlr_ret$x[1]), num_trees = as.integer(mlr_ret$x[2]))
+rf_is_mod
+yhat = predict(rf_is_mod, housing_Xtest)
+```
+
+
+```{r}
+#gfinal oos for the final model 
+cat("gfinal")
+oos_rmse = sqrt(mean((housing_ytest - yhat)^2))
+oos_rsq = 1 - sum((housing_ytest - yhat)^2)/sum((housing_ytest - mean(y_salesprice))^2)
+oos_rmse
+oos_rsq
+
+```
+
+
+
